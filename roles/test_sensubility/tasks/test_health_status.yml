@@ -12,6 +12,17 @@
   changed_when: false
   failed_when: container_nodes.stdout_lines|length != 1
 
+- name: Wait for sensubility health metric to be available in Prometheus
+  ansible.builtin.shell: >
+    /usr/bin/curl -sk {{ prom_auth_string }}
+    -g 'https://{{ prom_url }}/api/v1/query?query=sensubility_container_health_status{process="logrotate_crond"}'
+  register: metric_check
+  changed_when: false
+  retries: 30
+  delay: 10
+  until: >
+    metric_check.rc == 0 and
+    '"result":[]' not in metric_check.stdout
 
 - name: RHELOSP-176012 Stop logrotate_crond container on ceph-0
   ansible.builtin.shell:
@@ -38,13 +49,17 @@
   changed_when: false
 
 - name: RHELOSP-176036 Check that health status of container changed to 0
-  ansible.builtin.shell:
-    cmd: /usr/bin/curl -k {{ prom_auth_string }} -g https://{{ prom_url }}/api/v1/query? --data-urlencode 'query=last_over_time(sensubility_container_health_status{process="logrotate_crond",host="ceph-0.redhat.local"}[10m])' | grep -oP '(?<="value":).*' | awk -F, '{ print $2 }' | grep -o '[0-9]\+' | grep 0
+  ansible.builtin.shell: >
+    /usr/bin/curl -sk {{ prom_auth_string }}
+    -g 'https://{{ prom_url }}/api/v1/query'
+    --data-urlencode 'query=sensubility_container_health_status{process="logrotate_crond",host=~"ceph-0.*"}'
+    | python -c "import sys,json; r=json.load(sys.stdin)['data']['result'];
+    print(r[0]['value'][1]) if r else sys.exit(1)"
   register: output
   changed_when: false
-  retries: 60
+  retries: 30
   delay: 10
-  until: "output.stdout_lines | length == 1"
+  until: "output.stdout_lines | length == 1 and output.stdout_lines[0] == '0'"
 
 - name: RHELOSP-176035 Start logrotate_crond container
   ansible.builtin.shell:
@@ -57,15 +72,15 @@
 
 
 - name: RHELOSP-176038 Check that health status of container changed to 1
-  ansible.builtin.shell:
-    cmd: >-
-      /usr/bin/curl -k {{ prom_auth_string }} \
-        -g https://{{ prom_url }}/api/v1/query? \
-        --data-urlencode 'query=last_over_time(sensubility_container_health_status{process="logrotate_crond",host="ceph-0.redhat.local"}[10m])' \
-        | grep -oP '(?<="value":).*' | awk -F, '{ print $2 }' |  grep -o '[0-9]\+' | grep 1
+  ansible.builtin.shell: >
+    /usr/bin/curl -sk {{ prom_auth_string }}
+    -g 'https://{{ prom_url }}/api/v1/query'
+    --data-urlencode 'query=sensubility_container_health_status{process="logrotate_crond",host=~"ceph-0.*"}'
+    | python -c "import sys,json; r=json.load(sys.stdin)['data']['result'];
+    print(r[0]['value'][1]) if r else sys.exit(1)"
   register: output
   changed_when: false
-  retries: 60
+  retries: 30
   delay: 10
-  until: "output.stdout_lines | length == 1"
+  until: "output.stdout_lines | length == 1 and output.stdout_lines[0] == '1'"
 
